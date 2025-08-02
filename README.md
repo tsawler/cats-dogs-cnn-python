@@ -22,17 +22,17 @@ A Convolutional Neural Network (CNN) is a type of artificial neural network spec
 
 ## Requirements
 
-- Python 3.6 or higher
+- Python 3.13 or higher
 - PyTorch (1.7.0 or higher recommended)
 - torchvision
 - tqdm (for progress bars)
 - Pillow (for image processing)
-- CUDA-capable GPU (optional but recommended for faster training)
+- GPU enabled machine (Apple or NVIDIA, optional but recommended for faster training)
 
 You can install the required packages with:
 
 ```bash
-pip install torch torchvision tqdm pillow
+pip install -r requirements.txt
 ```
 
 ## Dataset Structure
@@ -58,7 +58,7 @@ Each class (cat, dog) should have its own folder containing the relevant images.
 Run the program with default parameters:
 
 ```bash
-python cat_dog_classifier.py
+python main.py
 ```
 
 This will:
@@ -93,7 +93,7 @@ You can customize the training process with various arguments:
 ## Example with Custom Parameters
 
 ```bash
-python cat_dog_classifier.py --data_dir ./my_images --image_size 224 --batch_size 64 --num_epochs 20 --learning_rate 0.0005
+python main.py --data_dir ./my_images --image_size 224 --batch_size 64 --num_epochs 20 --learning_rate 0.0005
 ```
 
 ## Understanding the Output
