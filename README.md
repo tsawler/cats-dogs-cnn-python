@@ -1,42 +1,43 @@
-# Cat vs Dog Image Classifier
+# Cat-Dog Image Classifier
 
-A PyTorch-based Convolutional Neural Network (CNN) for classifying images of cats and dogs.
+A Python program that trains a Convolutional Neural Network (CNN) to classify images of cats and dogs.
 
 ## Overview
 
-This project implements a CNN to distinguish between images of cats and dogs. The model is built with PyTorch, featuring:
+This program demonstrates how to build and train a deep learning model for image classification. It uses PyTorch, a popular deep learning framework, to create a neural network that can learn to distinguish between pictures of cats and dogs.
 
-- A 3-layer convolutional architecture
-- Data preprocessing and augmentation
-- Training with validation metrics
-- Model export to both PyTorch (.pth) and ONNX formats
-- Visualization of training performance
+If you're new to machine learning, this readme will guide you through the concepts, requirements, and usage of this program.
+
+## What is a CNN?
+
+A Convolutional Neural Network (CNN) is a type of artificial neural network specifically designed for processing structured grid data like images. Here's how it works in simple terms:
+
+1. **Convolutional Layers**: These scan the image with small filters to detect features like edges, textures, and patterns. Think of them as feature detectors that learn what parts of an image are important.
+
+2. **Pooling Layers**: These reduce the image size while preserving important information. They help make the network more efficient and focus on what matters.
+
+3. **Fully Connected Layers**: After extracting features with convolutional and pooling layers, these layers connect all the extracted features to make the final decision (cat or dog).
+
+4. **Training Process**: The network initially makes random guesses, compares them to the correct answers, and gradually adjusts its internal parameters to make better predictions.
 
 ## Requirements
 
-- Python 3.6+
-- PyTorch
+- Python 3.6 or higher
+- PyTorch (1.7.0 or higher recommended)
 - torchvision
-- matplotlib
-- tqdm
-- Pillow (PIL)
-- onnx (for ONNX export)
+- tqdm (for progress bars)
+- Pillow (for image processing)
+- CUDA-capable GPU (optional but recommended for faster training)
 
-Install dependencies:
+You can install the required packages with:
 
 ```bash
-pip install torch torchvision matplotlib tqdm Pillow onnx
+pip install torch torchvision tqdm pillow
 ```
 
-## Dataset
+## Dataset Structure
 
-### Getting the Dataset
-You can download the cat and dog images dataset from Microsoft:
-- Source: [Microsoft Cats and Dogs Dataset](https://www.microsoft.com/en-gb/download/details.aspx?id=54765)
-- This dataset contains 25,000 images of dogs and cats for training machine learning algorithms
-
-### Dataset Structure
-After downloading, organize your dataset in the following structure:
+The program expects your dataset to be organized in a specific way:
 
 ```
 data/
@@ -50,86 +51,130 @@ data/
     └── ...
 ```
 
-The script expects a `data` directory in the same folder as the script with subdirectories for each class.
+Each class (cat, dog) should have its own folder containing the relevant images.
 
-## Features
+## Basic Usage
 
-- **Device Flexibility**: Automatically uses NVIDIA GPU (CUDA), Apple GPU (MPS), or CPU based on availability
-- **Data Preprocessing**: Resizes images to 128x128 and applies normalization
-- **Training Progress**: Shows real-time progress bars with loss and accuracy metrics
-- **Performance Visualization**: Plots training loss and validation accuracy over time
-- **Model Export**: Saves the trained model in both PyTorch and ONNX formats for deployment
-
-## Model Architecture
-
-The CNN architecture consists of:
-
-1. Three convolutional layers with ReLU activation and max pooling
-2. Two fully connected layers
-3. Output layer with 2 classes (cat and dog)
-
-## Usage
-
-### Training
-
-Run the script to train the model:
+Run the program with default parameters:
 
 ```bash
 python cat_dog_classifier.py
 ```
 
-The script will:
-1. Load and preprocess images from the data directory
-2. Train the model for 10 epochs (configurable)
-3. Display training progress with loss and validation accuracy
+This will:
+1. Look for images in the `./data` directory
+2. Resize all images to 256×256 pixels
+3. Train for 10 epochs (complete passes through the dataset)
 4. Save the trained model as `cat_dog_classifier.pth` and `cat_dog_classifier.onnx`
-5. Generate performance plots
 
-### Inference (Example)
+## Command Line Arguments
 
-The script includes commented code for inference that you can uncomment to test with your own images:
+You can customize the training process with various arguments:
+
+### Dataset Parameters:
+- `--data_dir PATH`: Path to your dataset directory (default: './data')
+- `--image_size SIZE`: Size to resize images to (default: 256)
+
+### Training Parameters:
+- `--batch_size SIZE`: Number of images to process at once (default: 32)
+- `--learning_rate RATE`: Controls how quickly the model adapts (default: 0.001)
+- `--num_epochs NUM`: Number of complete passes through the dataset (default: 10)
+- `--momentum VAL`: Helps accelerate training in consistent directions (default: 0.9)
+- `--weight_decay VAL`: Helps prevent overfitting (default: 1e-4)
+
+### Output Parameters:
+- `--model_path PATH`: Where to save the PyTorch model (default: 'cat_dog_classifier.pth')
+- `--onnx_path PATH`: Where to save the ONNX model (default: 'cat_dog_classifier.onnx')
+
+### Other Parameters:
+- `--val_split RATIO`: Portion of data used for validation during training (default: 0.2)
+- `--patience NUM`: Epochs to wait before reducing learning rate (default: 2)
+
+## Example with Custom Parameters
+
+```bash
+python cat_dog_classifier.py --data_dir ./my_images --image_size 224 --batch_size 64 --num_epochs 20 --learning_rate 0.0005
+```
+
+## Understanding the Output
+
+During training, you'll see progress bars and information about:
+
+- **Loss**: How wrong the model's predictions are (lower is better)
+- **Accuracy**: Percentage of correct predictions on the validation set
+- **Learning Rate**: Current learning rate (may decrease during training)
+
+At the end, the program saves:
+- A PyTorch model (`.pth`) file: For use within other PyTorch applications
+- An ONNX model (`.onnx`) file: For cross-platform deployment or use with other frameworks
+
+## Machine Learning Concepts Explained
+
+### Training vs. Validation
+- **Training set**: The images the model learns from
+- **Validation set**: Images kept separate to test how well the model generalizes
+
+### Hyperparameters
+- **Batch size**: Number of images processed at once (higher uses more memory but can be faster)
+- **Learning rate**: Controls how quickly the model changes its parameters (too high can overshoot, too low can be slow)
+- **Epochs**: Number of complete passes through the dataset (more epochs = more learning time)
+
+### Overfitting
+When a model performs well on training data but poorly on new data. Several techniques in this program help prevent overfitting:
+- Dropout (randomly ignoring some neurons during training)
+- Weight decay (penalizing large weights)
+- Batch normalization (normalizing layer inputs)
+
+## How to Use Your Trained Model
+
+After training, you can use the model to classify new images. Here's a simple example:
 
 ```python
-# Example for using the trained model for inference
-loaded_model = CatDogCNN().to(device)
-loaded_model.load_state_dict(torch.load(MODEL_SAVE_PATH))
-loaded_model.eval()
+import torch
+from torchvision import transforms
+from PIL import Image
+from cat_dog_classifier import CatDogCNN  # Import the model class
 
-# Load and preprocess your test image
-test_image = Image.open("path/to/your/test/image.jpg").convert('RGB')
-test_tensor = transform(test_image).unsqueeze(0).to(device)
+# Load the trained model
+model = CatDogCNN(image_size=256)
+model.load_state_dict(torch.load('cat_dog_classifier.pth'))
+model.eval()  # Set to evaluation mode
 
-# Get prediction
+# Prepare image transformation
+transform = transforms.Compose([
+    transforms.Resize((256, 256)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+# Load and transform an image
+image = Image.open('new_image.jpg')
+input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+
+# Make prediction
 with torch.no_grad():
-    output = loaded_model(test_tensor)
-    probabilities = torch.softmax(output, dim=1)
-    _, predicted_class_idx = torch.max(probabilities, 1)
-
-predicted_label = dataset.classes[predicted_class_idx.item()]
-confidence = probabilities[0, predicted_class_idx.item()].item() * 100
-print(f"Predicted: {predicted_label} with {confidence:.2f}% confidence.")
+    output = model(input_tensor)
+    
+# Get class prediction
+_, predicted = torch.max(output, 1)
+class_names = ['cat', 'dog']
+print(f'Prediction: {class_names[predicted.item()]}')
 ```
 
-## Configuration
+## Further Learning
 
-Modify these parameters at the top of the script to suit your needs:
+If you're interested in learning more about machine learning and CNNs:
 
-```python
-DATA_DIR = './data'       # Path to your dataset
-BATCH_SIZE = 32           # Number of images per batch
-LEARNING_RATE = 0.01      # Learning rate for optimizer
-NUM_EPOCHS = 10           # Number of training epochs
-IMAGE_SIZE = (128, 128)   # Image resolution
-```
+1. **PyTorch Tutorials**: [https://pytorch.org/tutorials/](https://pytorch.org/tutorials/)
+2. **Convolutional Neural Networks**: [CS231n](http://cs231n.github.io/)
+3. **Deep Learning Book**: Goodfellow, Bengio, and Courville, "Deep Learning" (2016)
 
-## Output Files
+## Troubleshooting
 
-- `cat_dog_classifier.pth`: PyTorch model file
-- `cat_dog_classifier.onnx`: ONNX model file for cross-platform deployment
-- Training plots (displayed during execution)
+### Common Issues:
 
-## Notes
+1. **Out of Memory Error**: Reduce batch size using `--batch_size`
+2. **Slow Training**: Check if you're using GPU; if not, consider setting up CUDA
+3. **Poor Accuracy**: Try training for more epochs, adjusting learning rate, or getting more training data
+4. **Model Not Learning**: Ensure your dataset is correctly organized and contains sufficient examples
 
-- The script includes warning suppression for common Pillow TiffImagePlugin warnings
-- The dataset is split 80% for training and 20% for validation
-- For best results, provide a diverse dataset with high-quality images
