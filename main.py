@@ -11,14 +11,18 @@ For someone new to machine learning:
 - This program will learn to distinguish between cats and dogs based on their visual features
 """
 
-import warnings  # For suppressing unwanted warnings
 import argparse  # For parsing command-line arguments 
-import os        # For file and directory operations
-import torch     # The main deep learning framework we're using
+import os  # For file and directory operations
+import warnings  # For suppressing unwanted warnings
+
+import torch  # The main deep learning framework we're using
 import torch.nn as nn  # Neural network modules
 import torch.optim as optim  # Optimization algorithms for training
 from torch.utils.data import DataLoader  # For efficiently loading and batching data
-from torchvision import datasets, transforms  # For working with image datasets and transformations
+from torchvision import (  # For working with image datasets and transformations
+    datasets,
+    transforms,
+)
 from tqdm import tqdm  # For displaying progress bars during training
 
 
@@ -536,8 +540,8 @@ def run_inference(image_path, model_file, image_size, device):
     Returns:
         tuple: (predicted_class, confidence_score)
     """
-    from PIL import Image
     import numpy as np
+    from PIL import Image
     
     # Check if the image file exists
     if not os.path.exists(image_path):
@@ -614,7 +618,7 @@ def run_inference(image_path, model_file, image_size, device):
             print(f"Error during ONNX inference: {e}")
             return None, None
     else:
-        print(f"Error: Unsupported model file format. Use .pth or .onnx")
+        print("Error: Unsupported model file format. Use .pth or .onnx")
         return None, None
     
     # Define class names
@@ -629,7 +633,7 @@ def run_inference(image_path, model_file, image_size, device):
         conf_score = float(confidence)
     
     # Print results
-    print(f"\nInference Results:")
+    print("\nInference Results:")
     print(f"Image: {image_path}")
     print(f"Prediction: {pred_class}")
     print(f"Confidence: {conf_score:.2%}")
