@@ -97,6 +97,77 @@ You can customize the training process with various arguments:
 python main.py --data_dir ./my_images --image_size 224 --batch_size 64 --num_epochs 20 --learning_rate 0.0005
 ```
 
+## Running Inference on a Single Image
+
+After training a model, you can use it to classify individual images without retraining. The program supports inference mode for this purpose.
+
+### Basic Inference Usage
+
+To classify a single image using a trained model:
+
+```bash
+python main.py --inference --image_path path/to/your/image.jpg
+```
+
+This will:
+1. Automatically look for a trained model (`cat_dog_classifier.pth` or `cat_dog_classifier.onnx`)
+2. Load the image and preprocess it
+3. Run the model to predict whether it's a cat or dog
+4. Display the prediction and confidence score
+
+### Inference Command Line Arguments
+
+- `--inference`: Enable inference mode (required to run inference)
+- `--image_path PATH`: Path to the image file you want to classify (required for inference)
+- `--model_file PATH`: Specify a particular model file to use (optional, supports .pth or .onnx)
+- `--image_size SIZE`: Image size the model was trained with (default: 256)
+
+### Inference Examples
+
+Using the default model:
+```bash
+python main.py --inference --image_path ./test_images/cat1.jpg
+```
+
+Using a specific PyTorch model:
+```bash
+python main.py --inference --image_path ./test_images/dog1.jpg --model_file ./models/best_model.pth
+```
+
+Using an ONNX model:
+```bash
+python main.py --inference --image_path ./test_images/cat2.jpg --model_file ./models/exported_model.onnx
+```
+
+Using a model trained with different image size:
+```bash
+python main.py --inference --image_path ./test_images/dog2.jpg --model_file custom_model.pth --image_size 224
+```
+
+### Inference Output
+
+The inference mode will display:
+- The path to the image being classified
+- The predicted class (cat or dog)
+- The confidence score as a percentage
+
+Example output:
+```
+Using NVIDIA GPU (CUDA).
+Using default PyTorch model: cat_dog_classifier.pth
+
+Inference Results:
+Image: ./test_images/fluffy_cat.jpg
+Prediction: cat
+Confidence: 96.52%
+```
+
+### Requirements for Inference
+
+- A trained model file (.pth or .onnx format)
+- For ONNX inference: `pip install onnxruntime`
+- The same image size used during training (default: 256x256)
+
 ## Understanding the Output
 
 During training, you'll see progress bars and information about:
@@ -128,13 +199,27 @@ When a model performs well on training data but poorly on new data. Several tech
 
 ## How to Use Your Trained Model
 
-After training, you can use the model to classify new images. Here's a simple example:
+After training, you have two options to classify new images:
+
+### Option 1: Using the Built-in Inference Mode (Recommended)
+
+The easiest way is to use the program's built-in inference mode:
+
+```bash
+python main.py --inference --image_path your_image.jpg
+```
+
+See the "Running Inference on a Single Image" section above for more details.
+
+### Option 2: Using the Model in Your Own Python Code
+
+You can also load the model in your own Python scripts:
 
 ```python
 import torch
 from torchvision import transforms
 from PIL import Image
-from cat_dog_classifier import CatDogCNN  # Import the model class
+from main import CatDogCNN  # Import the model class
 
 # Load the trained model
 model = CatDogCNN(image_size=256)
@@ -156,10 +241,12 @@ input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
 with torch.no_grad():
     output = model(input_tensor)
     
-# Get class prediction
-_, predicted = torch.max(output, 1)
+# Get class prediction with confidence
+probabilities = torch.nn.functional.softmax(output, dim=1)
+confidence, predicted = torch.max(probabilities, 1)
 class_names = ['cat', 'dog']
 print(f'Prediction: {class_names[predicted.item()]}')
+print(f'Confidence: {confidence.item():.2%}')
 ```
 
 ## Further Learning

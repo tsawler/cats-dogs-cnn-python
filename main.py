@@ -67,6 +67,14 @@ def parse_args():
     parser.add_argument('--patience', type=int, default=2,
                         help='Patience for learning rate scheduler (epochs to wait before reducing learning rate)')
 
+    # Inference parameters
+    parser.add_argument('--inference', action='store_true',
+                        help='Run inference on a single image instead of training')
+    parser.add_argument('--image_path', type=str, default=None,
+                        help='Path to the image file for inference')
+    parser.add_argument('--model_file', type=str, default=None,
+                        help='Path to the model file to use for inference (.pth or .onnx)')
+
     return parser.parse_args()
 
 
@@ -512,24 +520,165 @@ def save_model(model, model_path, onnx_path, image_size, device):
         print("Please ensure you have the 'onnx' package installed (`pip install onnx`).")
 
 
+def run_inference(image_path, model_file, image_size, device):
+    """
+    Run inference on a single image using a trained model.
+    
+    This function loads a trained model and uses it to classify a single image
+    as either a cat or a dog. It supports both PyTorch (.pth) and ONNX (.onnx) models.
+    
+    Args:
+        image_path (str): Path to the image file to classify
+        model_file (str): Path to the trained model file (.pth or .onnx)
+        image_size (int): Size that the model was trained with
+        device: Device to run inference on (CPU or GPU)
+        
+    Returns:
+        tuple: (predicted_class, confidence_score)
+    """
+    from PIL import Image
+    import numpy as np
+    
+    # Check if the image file exists
+    if not os.path.exists(image_path):
+        print(f"Error: Image file not found at {image_path}")
+        return None, None
+    
+    # Check if the model file exists
+    if not os.path.exists(model_file):
+        print(f"Error: Model file not found at {model_file}")
+        return None, None
+    
+    # Define the image transformations (same as training)
+    transform = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
+    # Load and preprocess the image
+    try:
+        image = Image.open(image_path).convert('RGB')
+        input_tensor = transform(image).unsqueeze(0).to(device)
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        return None, None
+    
+    # Determine model type and load accordingly
+    if model_file.endswith('.pth'):
+        # Load PyTorch model
+        model = CatDogCNN(image_size).to(device)
+        try:
+            model.load_state_dict(torch.load(model_file, map_location=device))
+            model.eval()
+        except Exception as e:
+            print(f"Error loading PyTorch model: {e}")
+            return None, None
+        
+        # Run inference
+        with torch.no_grad():
+            outputs = model(input_tensor)
+            # Apply softmax to get probabilities
+            probabilities = torch.nn.functional.softmax(outputs, dim=1)
+            confidence, predicted = torch.max(probabilities, 1)
+            
+    elif model_file.endswith('.onnx'):
+        # Load ONNX model
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            print("Error: ONNX Runtime not installed. Install it with: pip install onnxruntime")
+            return None, None
+        
+        try:
+            # Create ONNX runtime session
+            ort_session = ort.InferenceSession(model_file)
+            
+            # Prepare input
+            ort_inputs = {ort_session.get_inputs()[0].name: input_tensor.cpu().numpy()}
+            
+            # Run inference
+            ort_outputs = ort_session.run(None, ort_inputs)
+            outputs = ort_outputs[0]
+            
+            # Apply softmax to get probabilities
+            def softmax(x):
+                exp_x = np.exp(x - np.max(x))
+                return exp_x / exp_x.sum()
+            
+            probabilities = softmax(outputs[0])
+            predicted = np.argmax(probabilities)
+            confidence = probabilities[predicted]
+            
+        except Exception as e:
+            print(f"Error during ONNX inference: {e}")
+            return None, None
+    else:
+        print(f"Error: Unsupported model file format. Use .pth or .onnx")
+        return None, None
+    
+    # Define class names
+    class_names = ['cat', 'dog']
+    
+    # Get prediction results
+    if model_file.endswith('.pth'):
+        pred_class = class_names[predicted.item()]
+        conf_score = confidence.item()
+    else:  # ONNX
+        pred_class = class_names[predicted]
+        conf_score = float(confidence)
+    
+    # Print results
+    print(f"\nInference Results:")
+    print(f"Image: {image_path}")
+    print(f"Prediction: {pred_class}")
+    print(f"Confidence: {conf_score:.2%}")
+    
+    return pred_class, conf_score
+
+
 def main():
     """
-    Main function to train and save the model.
+    Main function to train the model or run inference.
     
-    This orchestrates the entire training pipeline:
-    1. Parse command line arguments
-    2. Set up computing device
-    3. Load and prepare the data
-    4. Create and train the model
-    5. Save the trained model
+    This orchestrates either:
+    - The entire training pipeline (default mode)
+    - Inference on a single image (when --inference flag is used)
     """
     # Parse command line arguments
-    # This allows users to customize the training process
     args = parse_args()
 
     # Set up device (CPU or GPU)
-    # Using a GPU can make training 10-50x faster
     device = setup_device()
+
+    # Check if we're in inference mode
+    if args.inference:
+        # Validate inference arguments
+        if not args.image_path:
+            print("Error: --image_path is required when using --inference")
+            exit(1)
+        
+        # Determine which model file to use
+        if args.model_file:
+            model_file = args.model_file
+        else:
+            # Check for default model files
+            if os.path.exists(args.model_path):
+                model_file = args.model_path
+                print(f"Using default PyTorch model: {model_file}")
+            elif os.path.exists(args.onnx_path):
+                model_file = args.onnx_path
+                print(f"Using default ONNX model: {model_file}")
+            else:
+                print(f"Error: No trained model found. Please specify --model_file or ensure {args.model_path} or {args.onnx_path} exists")
+                exit(1)
+        
+        # Run inference
+        run_inference(args.image_path, model_file, args.image_size, device)
+        return
+
+    # Otherwise, proceed with training mode
+    print("Running in training mode...")
 
     # Load and prepare data
     # This loads images from disk and prepares them for training
