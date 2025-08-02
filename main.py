@@ -20,13 +20,16 @@ from tqdm import tqdm
 
 def parse_args():
     """Parse command line arguments with reasonable defaults."""
-    parser = argparse.ArgumentParser(description='Train a cat vs dog classifier')
+    parser = argparse.ArgumentParser(
+        description='Train a cat vs dog classifier')
 
     # Dataset parameters
     parser.add_argument('--data_dir', type=str, default='./data',
                         help='Path to the dataset directory')
     parser.add_argument('--image_size', type=int, default=256,
                         help='Size to resize images (square)')
+    parser.add_argument('--augmentation', action='store_true',
+                        help='Enable data augmentation for training')
 
     # Training hyperparameters
     parser.add_argument('--batch_size', type=int, default=32,
@@ -72,36 +75,39 @@ def parse_args():
 
 class EarlyStopping:
     """Early stopping to terminate training when validation loss stops improving."""
+
     def __init__(self, patience=3, min_delta=0.001):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
         self.best_score = None
         self.early_stop = False
-    
+
     def __call__(self, val_loss):
         score = -val_loss  # Higher score is better
-        
+
         if self.best_score is None:
             self.best_score = score
         elif score < self.best_score + self.min_delta:
             self.counter += 1
-            print(f"EarlyStopping counter: {self.counter} out of {self.patience}")
+            print(
+                f"EarlyStopping counter: {self.counter} out of {self.patience}")
             if self.counter >= self.patience:
                 self.early_stop = True
                 print("Early stopping triggered!")
         else:
             self.best_score = score
             self.counter = 0
-            
+
         return self.early_stop
 
 
 class CatDogCNN(nn.Module):
     """CNN architecture for cat vs dog classification."""
+
     def __init__(self, image_size):
         super(CatDogCNN, self).__init__()
-        
+
         # First convolutional block
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
@@ -138,7 +144,7 @@ class CatDogCNN(nn.Module):
             conv = getattr(self, f'conv{i}')
             bn = getattr(self, f'bn{i}')
             pool = getattr(self, f'pool{i}')
-            
+
             x = conv(x)
             x = bn(x)
             x = self.relu(x)
@@ -146,7 +152,7 @@ class CatDogCNN(nn.Module):
 
         # Flatten for fully connected layers
         x = x.view(x.size(0), -1)
-        
+
         # Fully connected layers
         x = self.fc1(x)
         x = self.relu(x)
@@ -169,17 +175,117 @@ def setup_device():
     return device
 
 
-def load_data(data_dir, image_size, batch_size, val_split):
-    """Load and prepare the dataset for training and validation."""
+def load_data(data_dir, image_size, batch_size, val_split, device):
+    """Load and prepare the dataset for training and validation with data augmentation."""
     # Suppress specific warnings
     warnings.filterwarnings("ignore", message="Truncated File Read",
                             category=UserWarning, module="PIL.TiffImagePlugin")
 
-    # Define transformations
+    # Determine if pin_memory should be enabled (not for MPS devices)
+    use_pin_memory = (device.type != 'mps')
+
+    # Define transformations for training (with augmentation)
+    train_transform = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        # Flip images horizontally with 50% probability
+        transforms.RandomHorizontalFlip(p=0.5),
+        # Randomly rotate by up to 15 degrees
+        transforms.RandomRotation(15),
+        transforms.ColorJitter(                  # Randomly adjust brightness, contrast, saturation
+            brightness=0.2,
+            contrast=0.2,
+            saturation=0.2,
+            hue=0.1
+        ),
+        transforms.RandomAffine(              # Random affine transformations
+            degrees=0,                        # No additional rotation
+            # Translate by up to 10% in x and y
+            translate=(0.1, 0.1),
+            scale=(0.9, 1.1),                 # Scale by 0.9 to 1.1
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                             0.229, 0.224, 0.225])
+    ])
+
+    # Define transformations for validation (no augmentation)
+    val_transform = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                             0.229, 0.224, 0.225])
+    ])
+
+    # Load dataset
+    try:
+        # First load the full dataset with a temporary transform
+        dataset = datasets.ImageFolder(root=data_dir, transform=None)
+        print(f"Found {len(dataset)} images in total.")
+        print(f"Classes: {dataset.classes}")
+
+        # Split dataset indices
+        train_size = int((1 - val_split) * len(dataset))
+        val_size = len(dataset) - train_size
+        indices = list(range(len(dataset)))
+
+        # Use fixed random seed for reproducible splits
+        generator = torch.Generator().manual_seed(42)
+        train_indices, val_indices = torch.utils.data.random_split(
+            indices, [train_size, val_size], generator=generator)
+
+        # Create subset datasets with appropriate transforms
+        train_dataset = torch.utils.data.Subset(
+            datasets.ImageFolder(root=data_dir, transform=train_transform),
+            train_indices.indices
+        )
+
+        val_dataset = torch.utils.data.Subset(
+            datasets.ImageFolder(root=data_dir, transform=val_transform),
+            val_indices.indices
+        )
+
+        print(f"Training set: {len(train_dataset)} images")
+        print(f"Validation set: {len(val_dataset)} images")
+
+    except Exception as e:
+        print(f"Error loading dataset from {data_dir}: {e}")
+        exit(1)
+
+    # Create DataLoaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,                # Use multiple workers for faster data loading
+        pin_memory=use_pin_memory     # Only use pin_memory for CUDA devices
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=use_pin_memory     # Only use pin_memory for CUDA devices
+    )
+
+    return train_loader, val_loader
+
+
+def load_data_no_augmentation(data_dir, image_size, batch_size, val_split, device):
+    """Load and prepare the dataset for training and validation without augmentation."""
+    # Suppress specific warnings
+    warnings.filterwarnings("ignore", message="Truncated File Read",
+                            category=UserWarning, module="PIL.TiffImagePlugin")
+
+    # Determine if pin_memory should be enabled (not for MPS devices)
+    use_pin_memory = (device.type != 'mps')
+
+    # Define standard transformations (no augmentation)
     transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                             0.229, 0.224, 0.225])
     ])
 
     # Load dataset
@@ -198,14 +304,27 @@ def load_data(data_dir, image_size, batch_size, val_split):
         dataset, [train_size, val_size])
 
     # Create DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,                # Use multiple workers for faster data loading
+        pin_memory=use_pin_memory     # Only use pin_memory for CUDA devices
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=use_pin_memory     # Only use pin_memory for CUDA devices
+    )
 
     return train_loader, val_loader
 
 
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler,
-                device, num_epochs, early_stopping_enabled=False, early_stopping_patience=3, 
+                device, num_epochs, early_stopping_enabled=False, early_stopping_patience=3,
                 early_stopping_min_delta=0.001):
     """Train the model and validate it after each epoch."""
     print("\nStarting training...")
@@ -216,7 +335,7 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
     # Store best model
     best_val_accuracy = 0.0
     best_model_state = None
-    
+
     # Initialize early stopping if enabled
     early_stopper = None
     if early_stopping_enabled:
@@ -224,14 +343,16 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             patience=early_stopping_patience,
             min_delta=early_stopping_min_delta
         )
-        print(f"Early stopping enabled with patience={early_stopping_patience}")
+        print(
+            f"Early stopping enabled with patience={early_stopping_patience}")
 
     # Training loop
     for epoch in range(num_epochs):
         # Training phase
         model.train()
         running_loss = 0.0
-        train_loader_tqdm = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)")
+        train_loader_tqdm = tqdm(
+            train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)")
 
         for inputs, labels in train_loader_tqdm:
             inputs, labels = inputs.to(device), labels.to(device)
@@ -241,7 +362,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
             loss.backward()
             optimizer.step()
             running_loss += loss.item()
-            train_loader_tqdm.set_postfix(loss=running_loss/(train_loader_tqdm.n+1))
+            train_loader_tqdm.set_postfix(
+                loss=running_loss/(train_loader_tqdm.n+1))
 
         avg_train_loss = running_loss / len(train_loader)
         train_losses.append(avg_train_loss)
@@ -253,7 +375,8 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         val_running_loss = 0.0
 
         with torch.no_grad():
-            val_loader_tqdm = tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Validation)")
+            val_loader_tqdm = tqdm(
+                val_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Validation)")
             for inputs, labels in val_loader_tqdm:
                 inputs, labels = inputs.to(device), labels.to(device)
                 outputs = model(inputs)
@@ -283,13 +406,14 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
 
         # Print summary
         print(f"Epoch {epoch+1}/{num_epochs}: Train Loss={avg_train_loss:.4f}, Val Loss={avg_val_loss:.4f}, Val Acc={val_accuracy:.2f}%")
-        
+
         # Check early stopping
         if early_stopping_enabled and early_stopper(avg_val_loss):
             print(f"Early stopping triggered after {epoch+1} epochs")
             break
 
-    print(f"\nTraining finished! Best validation accuracy: {best_val_accuracy:.2f}%")
+    print(
+        f"\nTraining finished! Best validation accuracy: {best_val_accuracy:.2f}%")
     return best_model_state, best_val_accuracy
 
 
@@ -310,7 +434,8 @@ def save_model(model, model_path, onnx_path, image_size, device):
                 export_params=True, opset_version=13,
                 do_constant_folding=True, input_names=['input'],
                 output_names=['output'],
-                dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+                dynamic_axes={'input': {0: 'batch_size'},
+                              'output': {0: 'batch_size'}}
             )
         print(f"Model exported to ONNX format at {onnx_path}")
     except Exception as e:
@@ -321,19 +446,20 @@ def run_inference(image_path, model_file, image_size, device):
     """Run inference on a single image using a trained model."""
     import numpy as np
     from PIL import Image
-    
+
     # Validate files exist
     if not os.path.exists(image_path) or not os.path.exists(model_file):
         print("Error: Image or model file not found")
         return None, None
-    
+
     # Define transformations
     transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[
+                             0.229, 0.224, 0.225])
     ])
-    
+
     # Load and preprocess image
     try:
         image = Image.open(image_path).convert('RGB')
@@ -341,7 +467,7 @@ def run_inference(image_path, model_file, image_size, device):
     except Exception as e:
         print(f"Error loading image: {e}")
         return None, None
-    
+
     # Process based on model type
     if model_file.endswith('.pth'):
         # PyTorch model
@@ -358,22 +484,23 @@ def run_inference(image_path, model_file, image_size, device):
         except Exception as e:
             print(f"Error with PyTorch model: {e}")
             return None, None
-            
+
     elif model_file.endswith('.onnx'):
         # ONNX model
         try:
             import onnxruntime as ort
             # Create session and run inference
             ort_session = ort.InferenceSession(model_file)
-            ort_inputs = {ort_session.get_inputs()[0].name: input_tensor.cpu().numpy()}
+            ort_inputs = {ort_session.get_inputs(
+            )[0].name: input_tensor.cpu().numpy()}
             ort_outputs = ort_session.run(None, ort_inputs)
             outputs = ort_outputs[0]
-            
+
             # Process results
             def softmax(x):
                 exp_x = np.exp(x - np.max(x))
                 return exp_x / exp_x.sum()
-            
+
             probabilities = softmax(outputs[0])
             predicted = np.argmax(probabilities)
             pred_class = ['cat', 'dog'][predicted]
@@ -384,14 +511,17 @@ def run_inference(image_path, model_file, image_size, device):
     else:
         print("Error: Unsupported model format")
         return None, None
-    
+
     # Print results
-    print(f"\nInference Results:\nImage: {image_path}\nPrediction: {pred_class}\nConfidence: {conf_score:.2%}")
+    print(
+        f"\nInference Results:\nImage: {image_path}\nPrediction: {pred_class}\nConfidence: {conf_score:.2%}")
     return pred_class, conf_score
 
 
 def main():
     """Main function to train the model or run inference."""
+    # Track if we're using DataLoader with workers
+    using_workers = False
     args = parse_args()
     device = setup_device()
 
@@ -400,7 +530,7 @@ def main():
         if not args.image_path:
             print("Error: --image_path is required for inference")
             exit(1)
-        
+
         # Find model file
         if args.model_file:
             model_file = args.model_file
@@ -413,7 +543,7 @@ def main():
         else:
             print("Error: No trained model found")
             exit(1)
-        
+
         # Run inference
         run_inference(args.image_path, model_file, args.image_size, device)
         return
@@ -421,40 +551,103 @@ def main():
     # Training mode
     print("Running in training mode...")
 
-    # Load data
-    train_loader, val_loader = load_data(
-        args.data_dir, args.image_size, args.batch_size, args.val_split
-    )
+    try:
+        # Load data with or without augmentation
+        if args.augmentation:
+            print("Using data augmentation during training")
+            train_loader, val_loader = load_data(
+                args.data_dir, args.image_size, args.batch_size, args.val_split, device
+            )
+        else:
+            print("No data augmentation")
+            train_loader, val_loader = load_data_no_augmentation(
+                args.data_dir, args.image_size, args.batch_size, args.val_split, device
+            )
 
-    # Initialize model
-    model = CatDogCNN(args.image_size).to(device)
-    print("\nModel Architecture:")
-    print(model)
+        # We are using workers if num_workers > 0
+        using_workers = True
 
-    # Define loss function and optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(
-        model.parameters(), lr=args.learning_rate,
-        momentum=args.momentum, weight_decay=args.weight_decay
-    )
+        # Initialize model
+        model = CatDogCNN(args.image_size).to(device)
+        print("\nModel Architecture:")
+        print(model)
 
-    # Learning rate scheduler
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.1, patience=args.patience
-    )
+        # Define loss function and optimizer
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(
+            model.parameters(), lr=args.learning_rate,
+            momentum=args.momentum, weight_decay=args.weight_decay
+        )
 
-    # Train the model
-    best_model_state, best_val_accuracy = train_model(
-        model, train_loader, val_loader, criterion, optimizer, scheduler,
-        device, args.num_epochs, args.early_stopping,
-        args.early_stopping_patience, args.early_stopping_min_delta
-    )
+        # Learning rate scheduler
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.1, patience=args.patience
+        )
 
-    # Load best model and save
-    if best_model_state is not None:
-        model.load_state_dict(best_model_state)
-        print("Loaded best model state")
-    save_model(model, args.model_path, args.onnx_path, args.image_size, device)
+        # Train the model
+        best_model_state, best_val_accuracy = train_model(
+            model, train_loader, val_loader, criterion, optimizer, scheduler,
+            device, args.num_epochs, args.early_stopping,
+            args.early_stopping_patience, args.early_stopping_min_delta
+        )
+
+        # Load best model and save
+        if best_model_state is not None:
+            model.load_state_dict(best_model_state)
+            print("Loaded best model state")
+        save_model(model, args.model_path, args.onnx_path,
+                   args.image_size, device)
+
+        print("All operations completed successfully!")
+
+    finally:
+        # Clean up resources to prevent hanging
+        print("Cleaning up resources...")
+
+        # Move model to CPU before deleting
+        if 'model' in locals():
+            model.to('cpu')
+            del model
+
+        # Release memory for specific device types
+        if device.type == 'cuda':
+            # CUDA-specific cleanup
+            torch.cuda.empty_cache()
+        elif device.type == 'mps':
+            # MPS-specific cleanup
+            # No direct equivalent to cuda.empty_cache() for MPS yet,
+            # but we can help free memory by removing references and forcing GC
+            import gc
+            # Run garbage collection multiple times to ensure resources are freed
+            gc.collect()
+            gc.collect()
+
+        # Explicitly close DataLoaders if they were created
+        if 'train_loader' in locals():
+            del train_loader
+        if 'val_loader' in locals():
+            del val_loader
+
+        # Additional garbage collection for all devices
+        import gc
+        gc.collect()
+
+        print("Exiting program")
+
+        # If we used workers, we need to handle multiprocessing cleanup
+        if using_workers:
+            # Import multiprocessing to access cleanup methods
+            import multiprocessing
+
+            # Clean exit instead of forced exit when possible
+            if hasattr(multiprocessing, '_exit_function'):
+                # Call the multiprocessing cleanup function
+                multiprocessing._exit_function()
+
+            # For Apple Silicon, use a normal exit which should be sufficient
+            # after proper cleanup
+            import sys
+            sys.exit(0)
 
 
 if __name__ == "__main__":
