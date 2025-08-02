@@ -51,7 +51,8 @@ data/
     └── ...
 ```
 
-Each class (cat, dog) should have its own folder containing the relevant images.
+Each class (cat, dog) should have its own folder containing the relevant images. You can use the Kaggle Cats and Dogs Dataset,
+which can be [downloaded here](https://www.microsoft.com/en-us/download/details.aspx?id=54765).
 
 ## Basic Usage
 
@@ -178,3 +179,9 @@ If you're interested in learning more about machine learning and CNNs:
 3. **Poor Accuracy**: Try training for more epochs, adjusting learning rate, or getting more training data
 4. **Model Not Learning**: Ensure your dataset is correctly organized and contains sufficient examples
 
+## License
+MIT license.
+
+## Acknowledgements
+
+This program the uses the Kaggle Dogs vs. Cats imageset: Will Cukierski. Dogs vs. Cats. [https://kaggle.com/competitions/dogs-vs-cats](https://kaggle.com/competitions/dogs-vs-cats), 2013. Kaggle.
