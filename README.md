@@ -91,11 +91,23 @@ You can customize the training process with various arguments:
 - `--val_split RATIO`: Portion of data used for validation during training (default: 0.2)
 - `--patience NUM`: Epochs to wait before reducing learning rate (default: 2)
 
+### Early Stopping Parameters:
+- `--early_stopping`: Enable early stopping to prevent overfitting
+- `--early_stopping_patience NUM`: Number of epochs to wait before stopping if validation loss doesn't improve (default: 3)
+- `--early_stopping_min_delta VAL`: Minimum change in validation loss to qualify as improvement (default: 0.001)
+
 ## Example with Custom Parameters
 
 ```bash
 python main.py --data_dir ./my_images --image_size 224 --batch_size 64 --num_epochs 20 --learning_rate 0.0005
 ```
+
+Example with early stopping enabled:
+```bash
+python main.py --early_stopping --early_stopping_patience 5 --num_epochs 50
+```
+
+This will stop training early if the validation loss doesn't improve for 5 consecutive epochs, even if it hasn't reached 50 epochs.
 
 ## Running Inference on a Single Image
 
@@ -196,6 +208,7 @@ When a model performs well on training data but poorly on new data. Several tech
 - Dropout (randomly ignoring some neurons during training)
 - Weight decay (penalizing large weights)
 - Batch normalization (normalizing layer inputs)
+- Early stopping (stopping training when validation performance stops improving)
 
 ## How to Use Your Trained Model
 
