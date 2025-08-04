@@ -1,8 +1,8 @@
-torch
-torchvision
-matplotlib
-numpy
-Pillow
-tqdm
-onnx
-onnxruntime
+torch==2.7.1
+torchvision==0.22.1
+matplotlib==3.10.3
+numpy==2.3.0
+Pillow==11.2.1
+tqdm==4.67.1
+onnx==1.18.0
+onnxruntime==1.22.1
