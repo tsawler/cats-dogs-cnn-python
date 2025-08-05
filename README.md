@@ -280,7 +280,7 @@ If you're interested in learning more about machine learning and CNNs:
 4. **Model Not Learning**: Ensure your dataset is correctly organized and contains sufficient examples
 
 ## License
-MIT license.
+MIT license. See [LICENSE.md](LICENSE.md)
 
 ## Acknowledgements
 
