@@ -268,7 +268,7 @@ If you're interested in learning more about machine learning and CNNs:
 
 1. **PyTorch Tutorials**: [https://pytorch.org/tutorials/](https://pytorch.org/tutorials/)
 2. **Convolutional Neural Networks**: [CS231n](http://cs231n.github.io/)
-3. **Deep Learning Book**: Goodfellow, Bengio, and Courville. ***[Deep Learning](https://www.deeplearningbook.org/)***. MIT, 2016.
+3. **Deep Learning Book**: Goodfellow, Bengio, and Courville. _[Deep Learning](https://www.deeplearningbook.org/)_. MIT, 2016.
 
 ## Troubleshooting
 
