@@ -28,6 +28,8 @@ A Convolutional Neural Network (CNN) is a type of artificial neural network spec
 - tqdm (for progress bars)
 - Pillow (for image processing)
 - GPU enabled machine (Apple or NVIDIA, optional but recommended for faster training)
+- onnxruntime
+- onnx
 
 You can install the required packages with:
 
