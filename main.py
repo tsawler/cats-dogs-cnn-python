@@ -591,42 +591,11 @@ def run_inference(image_path, model_file, image_size, device):
     return pred_class, conf_score
 
 
-def main():
+def run_training_and_cleanup(args, device):
     """
-    Main function to train the model or run inference.
-
-    This function:
-    1. Parses command line arguments
-    2. Sets up the device (CPU/GPU)
-    3. Either runs inference on a single image or trains a new model
-    4. Handles cleanup to prevent resource leaks
+    Encapsulates the training process to ensure DataLoaders are properly cleaned up.
     """
     using_workers = False
-    args = parse_args()
-    device = setup_device()
-
-    if args.inference:
-        if not args.image_path:
-            print("Error: --image_path is required for inference")
-            exit(1)
-
-        if args.model_file:
-            model_file = args.model_file
-        elif Path(args.model_path).exists():
-            model_file = args.model_path
-            print(f"Using default PyTorch model: {model_file}")
-        elif Path(args.onnx_path).exists():
-            model_file = args.onnx_path
-            print(f"Using default ONNX model: {model_file}")
-        else:
-            print("Error: No trained model found")
-            exit(1)
-
-        run_inference(args.image_path, model_file, args.image_size, device)
-        return
-
-    print("Running in training mode...")
-
     try:
         train_loader, val_loader = load_data(
             args.data_dir, args.image_size, args.batch_size, args.val_split, device, args.augmentation
@@ -656,32 +625,73 @@ def main():
         if best_model_state is not None:
             model.load_state_dict(best_model_state)
             print("Loaded best model state")
-        save_model(model, args.model_path, args.onnx_path,
-                   args.image_size, device)
+        save_model(model, args.model_path, args.onnx_path, args.image_size, device)
 
         print("All operations completed successfully!")
+        
+        # Explicitly delete loaders and model to force cleanup
+        del train_loader
+        del val_loader
+        del model
+        
+        return using_workers
 
     finally:
         print("Cleaning up resources...")
-        if 'model' in locals():
-            model.to('cpu')
-            del model
-        
-        if 'train_loader' in locals():
-            del train_loader
-        if 'val_loader' in locals():
-            del val_loader
-
         if device.type == 'cuda':
             torch.cuda.empty_cache()
         elif device.type == 'mps':
             gc.collect()
             gc.collect()
-
         gc.collect()
+        
+    return False
 
-        if using_workers and hasattr(multiprocessing, '_exit_function'):
-            multiprocessing._exit_function()
+
+def main():
+    """
+    Main function to train the model or run inference.
+    
+    This function:
+    1. Parses command line arguments
+    2. Sets up the device (CPU/GPU)
+    3. Either runs inference on a single image or trains a new model
+    4. Handles cleanup to prevent resource leaks
+    """
+    args = parse_args()
+    device = setup_device()
+
+    if args.inference:
+        if not args.image_path:
+            print("Error: --image_path is required for inference")
+            exit(1)
+
+        if args.model_file:
+            model_file = args.model_file
+        elif Path(args.model_path).exists():
+            model_file = args.model_path
+            print(f"Using default PyTorch model: {model_file}")
+        elif Path(args.onnx_path).exists():
+            model_file = args.onnx_path
+            print(f"Using default ONNX model: {model_file}")
+        else:
+            print("Error: No trained model found")
+            exit(1)
+
+        run_inference(args.image_path, model_file, args.image_size, device)
+        return
+    else:
+        # Run training in a separate function to ensure proper resource cleanup
+        using_workers = run_training_and_cleanup(args, device)
+        
+        # This block is now outside the function and only runs after training is done.
+        # This is where the final multiprocessing cleanup can occur.
+        if using_workers:
+            if hasattr(multiprocessing, '_exit_function'):
+                # Call the multiprocessing cleanup function
+                multiprocessing._exit_function()
+            # For Apple Silicon, use a normal exit which should be sufficient
+            # after proper cleanup
             sys.exit(0)
 
 
