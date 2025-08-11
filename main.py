@@ -9,6 +9,7 @@ import argparse
 import warnings
 import gc
 import sys
+import os
 import multiprocessing
 from pathlib import Path
 
@@ -684,15 +685,10 @@ def main():
         # Run training in a separate function to ensure proper resource cleanup
         using_workers = run_training_and_cleanup(args, device)
         
-        # This block is now outside the function and only runs after training is done.
-        # This is where the final multiprocessing cleanup can occur.
+        # If we used worker processes, force a clean exit
         if using_workers:
-            if hasattr(multiprocessing, '_exit_function'):
-                # Call the multiprocessing cleanup function
-                multiprocessing._exit_function()
-            # For Apple Silicon, use a normal exit which should be sufficient
-            # after proper cleanup
-            sys.exit(0)
+            print("Forcing clean exit...")
+            os._exit(0)  # Immediately terminate the process without cleanup
 
 
 if __name__ == "__main__":
