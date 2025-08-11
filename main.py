@@ -12,7 +12,9 @@ import warnings
 import torch
 import torch.nn as nn  # Neural network module with building blocks for ML models
 import torch.optim as optim  # Optimization algorithms like SGD, Adam, etc.
-from torch.utils.data import DataLoader  # Helps load data in batches for efficient training
+from torch.utils.data import (
+    DataLoader,  # Helps load data in batches for efficient training
+)
 from torchvision import datasets, transforms  # Vision-specific utilities and datasets
 from tqdm import tqdm  # Progress bar for tracking training
 
