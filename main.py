@@ -8,21 +8,27 @@ Hyperparameters can be specified via command-line arguments.
 import argparse
 import os
 import warnings
+import gc
+import sys
+import multiprocessing
+from pathlib import Path
 
 import torch
-import torch.nn as nn  # Neural network module with building blocks for ML models
-import torch.optim as optim  # Optimization algorithms like SGD, Adam, etc.
+import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import (
-    DataLoader,  # Helps load data in batches for efficient training
+    DataLoader,
+    random_split,
+    Subset
 )
-from torchvision import datasets, transforms  # Vision-specific utilities and datasets
-from tqdm import tqdm  # Progress bar for tracking training
+from torchvision import datasets, transforms
+from tqdm import tqdm
 
 
 def parse_args():
     """
     Parse command line arguments with reasonable defaults.
-    
+
     This function defines all the parameters that can be controlled from the command line,
     allowing for easy experimentation without modifying the code.
     """
@@ -60,7 +66,7 @@ def parse_args():
                         help='Validation set split ratio - percentage of data used for validation')
     parser.add_argument('--patience', type=int, default=2,
                         help='Patience for learning rate scheduler - how many epochs to wait before reducing learning rate')
-    
+
     # Early stopping parameters - helps prevent overfitting by stopping training when performance stops improving
     parser.add_argument('--early_stopping', action='store_true',
                         help='Enable early stopping')
@@ -83,10 +89,10 @@ def parse_args():
 class EarlyStopping:
     """
     Early stopping mechanism to terminate training when validation loss stops improving.
-    
+
     This prevents overfitting by monitoring validation loss and stopping training
     when the model starts to memorize the training data instead of learning general patterns.
-    
+
     Args:
         patience (int): Number of epochs to wait before stopping if no improvement
         min_delta (float): Minimum change to qualify as an improvement
@@ -102,10 +108,10 @@ class EarlyStopping:
     def __call__(self, val_loss):
         """
         Check if training should be stopped based on validation loss.
-        
+
         Args:
             val_loss (float): Current validation loss
-            
+
         Returns:
             bool: True if early stopping should be triggered, False otherwise
         """
@@ -134,13 +140,13 @@ class EarlyStopping:
 class CatDogCNN(nn.Module):
     """
     CNN architecture for cat vs dog classification.
-    
+
     This model uses a series of convolutional layers followed by fully connected layers.
     Each convolutional layer extracts increasingly complex features from the images:
     - First layers detect simple features like edges and textures
     - Middle layers combine these to detect patterns like shapes
     - Later layers detect high-level features like "whiskers" or "ears"
-    
+
     Args:
         image_size (int): Size of the input images (square)
     """
@@ -193,12 +199,12 @@ class CatDogCNN(nn.Module):
     def forward(self, x):
         """
         Forward pass through the network.
-        
+
         This defines how the input flows through the layers to produce an output.
-        
+
         Args:
             x (Tensor): Input tensor of shape [batch_size, 3, image_size, image_size]
-            
+
         Returns:
             Tensor: Output tensor of shape [batch_size, 2] with logits for each class
         """
@@ -234,14 +240,14 @@ class CatDogCNN(nn.Module):
 def setup_device():
     """
     Set up and return the device for computation (GPU or CPU).
-    
+
     This function checks for available hardware acceleration options:
     1. NVIDIA GPU (CUDA)
     2. Apple GPU (MPS)
     3. CPU (fallback)
-    
+
     Using a GPU can significantly speed up neural network training.
-    
+
     Returns:
         torch.device: Device to use for computation
     """
@@ -257,177 +263,83 @@ def setup_device():
     return device
 
 
-def load_data(data_dir, image_size, batch_size, val_split, device):
+def load_data(data_dir, image_size, batch_size, val_split, device, augmentation):
     """
-    Load and prepare the dataset for training and validation with data augmentation.
-    
-    Data augmentation artificially increases the size of the training dataset by applying
-    random transformations (flips, rotations, color changes) to the original images.
-    This helps the model generalize better and reduces overfitting.
-    
+    Load and prepare the dataset for training and validation with optional data augmentation.
+
     Args:
         data_dir (str): Directory containing the dataset
         image_size (int): Size to resize images to
         batch_size (int): Number of images to process at once
         val_split (float): Fraction of data to use for validation
         device (torch.device): Device to use for computation
-        
+        augmentation (bool): Whether to enable data augmentation for training
+
     Returns:
         tuple: (train_loader, val_loader) DataLoader objects for training and validation
     """
-    # Suppress specific warnings from image processing
     warnings.filterwarnings("ignore", message="Truncated File Read",
                             category=UserWarning, module="PIL.TiffImagePlugin")
 
-    # Determine if pin_memory should be enabled (not for MPS devices)
-    # pin_memory speeds up data transfer to GPU but doesn't work well with MPS
     use_pin_memory = (device.type != 'mps')
 
-    # Define transformations for training (with augmentation)
-    # These transformations are applied randomly to each image during training
-    train_transform = transforms.Compose([
-        # Resize all images to the same dimensions
-        transforms.Resize((image_size, image_size)),
-        # Flip images horizontally with 50% probability
-        transforms.RandomHorizontalFlip(p=0.5),
-        # Randomly rotate by up to 15 degrees
-        transforms.RandomRotation(15),
-        # Randomly adjust brightness, contrast, saturation
-        # This helps the model be robust to different lighting conditions
-        transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2,
-            saturation=0.2,
-            hue=0.1
-        ),
-        # Random affine transformations (translation, scaling)
-        # This helps the model be robust to different object positions and sizes
-        transforms.RandomAffine(
-            degrees=0,                        # No additional rotation
-            translate=(0.1, 0.1),             # Translate by up to 10% in x and y
-            scale=(0.9, 1.1),                 # Scale by 0.9 to 1.1
-        ),
-        # Convert to PyTorch tensor
-        transforms.ToTensor(),
-        # Normalize pixel values using ImageNet means and stds
-        # This standardizes the input data which helps training
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    # Define transformations for validation (no augmentation)
-    # For validation, we only resize, convert to tensor, and normalize
     val_transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # Load dataset
+    if augmentation:
+        print("Using data augmentation during training")
+        train_transform = transforms.Compose([
+            transforms.Resize((image_size, image_size)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomRotation(15),
+            transforms.ColorJitter(
+                brightness=0.2,
+                contrast=0.2,
+                saturation=0.2,
+                hue=0.1
+            ),
+            transforms.RandomAffine(
+                degrees=0,
+                translate=(0.1, 0.1),
+                scale=(0.9, 1.1),
+            ),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    else:
+        print("No data augmentation")
+        train_transform = val_transform
+
     try:
-        # First load the full dataset with a temporary transform
-        dataset = datasets.ImageFolder(root=data_dir, transform=None)
-        print(f"Found {len(dataset)} images in total.")
-        print(f"Classes: {dataset.classes}")
+        full_dataset = datasets.ImageFolder(root=data_dir)
+        print(f"Found {len(full_dataset)} images in total.")
+        print(f"Classes: {full_dataset.classes}")
 
-        # Split dataset indices
-        train_size = int((1 - val_split) * len(dataset))
-        val_size = len(dataset) - train_size
-        indices = list(range(len(dataset)))
-
-        # Use fixed random seed for reproducible splits
+        train_size = int((1 - val_split) * len(full_dataset))
+        val_size = len(full_dataset) - train_size
         generator = torch.Generator().manual_seed(42)
-        train_indices, val_indices = torch.utils.data.random_split(
-            indices, [train_size, val_size], generator=generator)
-
-        # Create subset datasets with appropriate transforms
-        train_dataset = torch.utils.data.Subset(
-            datasets.ImageFolder(root=data_dir, transform=train_transform),
-            train_indices.indices
+        train_indices, val_indices = random_split(
+            range(len(full_dataset)), [train_size, val_size], generator=generator
         )
 
-        val_dataset = torch.utils.data.Subset(
-            datasets.ImageFolder(root=data_dir, transform=val_transform),
-            val_indices.indices
-        )
+        train_subset = Subset(full_dataset, train_indices.indices)
+        train_subset.dataset.transform = train_transform
 
-        print(f"Training set: {len(train_dataset)} images")
-        print(f"Validation set: {len(val_dataset)} images")
+        val_subset = Subset(full_dataset, val_indices.indices)
+        val_subset.dataset.transform = val_transform
+
+        print(f"Training set: {len(train_subset)} images")
+        print(f"Validation set: {len(val_subset)} images")
 
     except Exception as e:
         print(f"Error loading dataset from {data_dir}: {e}")
         exit(1)
 
-    # Create DataLoaders
-    # DataLoader handles batching, shuffling, and loading data in parallel
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,              # Shuffle training data to prevent learning order biases
-        num_workers=4,             # Use multiple workers for faster data loading
-        pin_memory=use_pin_memory  # Only use pin_memory for CUDA devices
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,             # No need to shuffle validation data
-        num_workers=4,
-        pin_memory=use_pin_memory
-    )
-
-    return train_loader, val_loader
-
-
-def load_data_no_augmentation(data_dir, image_size, batch_size, val_split, device):
-    """
-    Load and prepare the dataset for training and validation without augmentation.
-    
-    This version is used when augmentation is disabled. It only applies basic
-    preprocessing (resize, normalize) without random transformations.
-    
-    Args:
-        data_dir (str): Directory containing the dataset
-        image_size (int): Size to resize images to
-        batch_size (int): Number of images to process at once
-        val_split (float): Fraction of data to use for validation
-        device (torch.device): Device to use for computation
-        
-    Returns:
-        tuple: (train_loader, val_loader) DataLoader objects for training and validation
-    """
-    # Suppress specific warnings
-    warnings.filterwarnings("ignore", message="Truncated File Read",
-                            category=UserWarning, module="PIL.TiffImagePlugin")
-
-    # Determine if pin_memory should be enabled (not for MPS devices)
-    use_pin_memory = (device.type != 'mps')
-
-    # Define standard transformations (no augmentation)
-    # Only basic preprocessing is applied to all images
-    transform = transforms.Compose([
-        transforms.Resize((image_size, image_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-
-    # Load dataset
-    try:
-        dataset = datasets.ImageFolder(root=data_dir, transform=transform)
-        print(f"Found {len(dataset)} images in total.")
-        print(f"Classes: {dataset.classes}")
-    except Exception as e:
-        print(f"Error loading dataset from {data_dir}: {e}")
-        exit(1)
-
-    # Split dataset
-    train_size = int((1 - val_split) * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        dataset, [train_size, val_size])
-
-    # Create DataLoaders
-    train_loader = DataLoader(
-        train_dataset,
+        train_subset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=4,
@@ -435,7 +347,7 @@ def load_data_no_augmentation(data_dir, image_size, batch_size, val_split, devic
     )
 
     val_loader = DataLoader(
-        val_dataset,
+        val_subset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=4,
@@ -450,14 +362,14 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
                 early_stopping_min_delta=0.001):
     """
     Train the model and validate it after each epoch.
-    
+
     This function:
     1. Trains the model on the training data
     2. Validates the model on the validation data
     3. Adjusts the learning rate if needed
     4. Implements early stopping if enabled
     5. Tracks and returns the best model state
-    
+
     Args:
         model (nn.Module): The neural network model to train
         train_loader (DataLoader): DataLoader for training data
@@ -470,20 +382,17 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         early_stopping_enabled (bool): Whether to use early stopping
         early_stopping_patience (int): Number of epochs to wait before stopping
         early_stopping_min_delta (float): Minimum change to qualify as improvement
-        
+
     Returns:
         tuple: (best_model_state, best_val_accuracy) Best model state and its validation accuracy
     """
     print("\nStarting training...")
-    # Track progress
     train_losses = []
     val_accuracies = []
 
-    # Store best model
     best_val_accuracy = 0.0
     best_model_state = None
 
-    # Initialize early stopping if enabled
     early_stopper = None
     if early_stopping_enabled:
         early_stopper = EarlyStopping(
@@ -493,100 +402,67 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         print(
             f"Early stopping enabled with patience={early_stopping_patience}")
 
-    # Training loop - iterate through the dataset multiple times
     for epoch in range(num_epochs):
         # ===== Training phase =====
-        model.train()  # Set model to training mode (enables dropout, etc.)
+        model.train()
         running_loss = 0.0
-        # Progress bar for training
         train_loader_tqdm = tqdm(
             train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Training)")
 
-        # Iterate through batches
         for inputs, labels in train_loader_tqdm:
-            # Move data to the selected device (CPU/GPU)
             inputs, labels = inputs.to(device), labels.to(device)
-            
-            # Zero the parameter gradients
-            # This is necessary because gradients accumulate by default
+
             optimizer.zero_grad()
-            
-            # Forward pass: compute predictions
             outputs = model(inputs)
-            
-            # Compute loss between predictions and true labels
             loss = criterion(outputs, labels)
-            
-            # Backward pass: compute gradients
             loss.backward()
-            
-            # Update model parameters based on gradients
             optimizer.step()
-            
-            # Track loss
+
             running_loss += loss.item()
             train_loader_tqdm.set_postfix(
                 loss=running_loss/(train_loader_tqdm.n+1))
 
-        # Calculate average training loss for this epoch
         avg_train_loss = running_loss / len(train_loader)
         train_losses.append(avg_train_loss)
 
         # ===== Validation phase =====
-        model.eval()  # Set model to evaluation mode (disables dropout, etc.)
+        model.eval()
         correct_predictions = 0
         total_samples = 0
         val_running_loss = 0.0
 
-        # No gradient computation needed for validation
         with torch.no_grad():
-            # Progress bar for validation
             val_loader_tqdm = tqdm(
                 val_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Validation)")
             for inputs, labels in val_loader_tqdm:
                 inputs, labels = inputs.to(device), labels.to(device)
-                
-                # Forward pass only (no backprop during validation)
+
                 outputs = model(inputs)
-                
-                # Calculate loss
                 loss = criterion(outputs, labels)
                 val_running_loss += loss.item()
-                
-                # Get predictions by taking the max value's index
+
                 _, predicted = torch.max(outputs.data, 1)
-                
-                # Count correct predictions
                 total_samples += labels.size(0)
                 correct_predictions += (predicted == labels).sum().item()
-                
-                # Update progress bar
+
                 val_loader_tqdm.set_postfix(
                     accuracy=f"{100 * correct_predictions / total_samples:.2f}%")
 
-        # Calculate metrics
         avg_val_loss = val_running_loss / len(val_loader)
         val_accuracy = 100 * correct_predictions / total_samples
         val_accuracies.append(val_accuracy)
 
-        # Learning rate adjustment
-        # Reduce learning rate when validation loss plateaus
         scheduler.step(avg_val_loss)
         current_lr = optimizer.param_groups[0]['lr']
         print(f"Current learning rate: {current_lr}")
 
-        # Save best model
-        # Keep track of the model with the highest validation accuracy
         if val_accuracy > best_val_accuracy:
             best_val_accuracy = val_accuracy
             best_model_state = model.state_dict().copy()
             print(f"New best model: {best_val_accuracy:.2f}% accuracy")
 
-        # Print summary
         print(f"Epoch {epoch+1}/{num_epochs}: Train Loss={avg_train_loss:.4f}, Val Loss={avg_val_loss:.4f}, Val Acc={val_accuracy:.2f}%")
 
-        # Check early stopping
-        # Stop training if validation loss hasn't improved for a while
         if early_stopping_enabled and early_stopper(avg_val_loss):
             print(f"Early stopping triggered after {epoch+1} epochs")
             break
@@ -599,11 +475,11 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
 def save_model(model, model_path, onnx_path, image_size, device):
     """
     Save the trained model in PyTorch and ONNX formats.
-    
+
     PyTorch format (.pth) is used within PyTorch applications.
     ONNX format (.onnx) allows the model to be used by different frameworks
     and deployment platforms.
-    
+
     Args:
         model (nn.Module): The trained model to save
         model_path (str): Path to save the PyTorch model
@@ -611,27 +487,24 @@ def save_model(model, model_path, onnx_path, image_size, device):
         image_size (int): Size of the input images
         device (torch.device): Device used for computation
     """
-    # Save PyTorch model
     torch.save(model.state_dict(), model_path)
     print(f"PyTorch model saved to {model_path}")
 
-    # Export to ONNX format
-    model.eval()  # Set to evaluation mode
-    # Create a dummy input tensor with the correct shape
+    model.eval()
     dummy_input = torch.randn(1, 3, image_size, image_size).to(device)
 
     try:
         with torch.no_grad():
             torch.onnx.export(
-                model,                              # Model being exported
-                dummy_input,                        # Example input
-                onnx_path,                          # Output file
-                export_params=True,                 # Export model parameters
-                opset_version=13,                   # ONNX version
-                do_constant_folding=True,           # Optimization: fold constants
-                input_names=['input'],              # Names for inputs
-                output_names=['output'],            # Names for outputs
-                dynamic_axes={'input': {0: 'batch_size'},  # Variable batch size
+                model,
+                dummy_input,
+                onnx_path,
+                export_params=True,
+                opset_version=13,
+                do_constant_folding=True,
+                input_names=['input'],
+                output_names=['output'],
+                dynamic_axes={'input': {0: 'batch_size'},
                               'output': {0: 'batch_size'}}
             )
         print(f"Model exported to ONNX format at {onnx_path}")
@@ -642,84 +515,67 @@ def save_model(model, model_path, onnx_path, image_size, device):
 def run_inference(image_path, model_file, image_size, device):
     """
     Run inference on a single image using a trained model.
-    
+
     This function can use either a PyTorch (.pth) or ONNX (.onnx) model
     to classify a single image as cat or dog.
-    
+
     Args:
         image_path (str): Path to the image file
         model_file (str): Path to the model file
         image_size (int): Size to resize the image to
         device (torch.device): Device to use for computation
-        
+
     Returns:
         tuple: (prediction, confidence) Class prediction and confidence score
     """
     import numpy as np
     from PIL import Image
 
-    # Validate files exist
-    if not os.path.exists(image_path) or not os.path.exists(model_file):
+    if not Path(image_path).exists() or not Path(model_file).exists():
         print("Error: Image or model file not found")
         return None, None
 
-    # Define transformations - same as validation transforms
     transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 
-    # Load and preprocess image
     try:
-        image = Image.open(image_path).convert('RGB')  # Ensure image is RGB
-        input_tensor = transform(image).unsqueeze(0).to(device)  # Add batch dimension
+        image = Image.open(image_path).convert('RGB')
+        input_tensor = transform(image).unsqueeze(0).to(device)
     except Exception as e:
         print(f"Error loading image: {e}")
         return None, None
 
-    # Process based on model type
-    if model_file.endswith('.pth'):
-        # PyTorch model
+    if Path(model_file).suffix == '.pth':
         model = CatDogCNN(image_size).to(device)
         try:
-            # Load model weights
             model.load_state_dict(torch.load(model_file, map_location=device))
-            model.eval()  # Set to evaluation mode
-            
-            # Run inference
-            with torch.no_grad():  # No gradients needed for inference
+            model.eval()
+
+            with torch.no_grad():
                 outputs = model(input_tensor)
-                # Convert logits to probabilities with softmax
                 probabilities = torch.nn.functional.softmax(outputs, dim=1)
-                # Get the highest probability and its index
                 confidence, predicted = torch.max(probabilities, 1)
-                # Map index to class name
                 pred_class = ['cat', 'dog'][predicted.item()]
                 conf_score = confidence.item()
         except Exception as e:
             print(f"Error with PyTorch model: {e}")
             return None, None
 
-    elif model_file.endswith('.onnx'):
-        # ONNX model
+    elif Path(model_file).suffix == '.onnx':
         try:
             import onnxruntime as ort
-            # Create ONNX Runtime session
             ort_session = ort.InferenceSession(model_file)
-            # Prepare input for ONNX model
             ort_inputs = {ort_session.get_inputs()[0].name: input_tensor.cpu().numpy()}
-            # Run inference
             ort_outputs = ort_session.run(None, ort_inputs)
             outputs = ort_outputs[0]
 
-            # Process results
-            # Define softmax function (not directly available in numpy)
             def softmax(x):
                 exp_x = np.exp(x - np.max(x))
                 return exp_x / exp_x.sum()
 
-            # Calculate probabilities and get prediction
             probabilities = softmax(outputs[0])
             predicted = np.argmax(probabilities)
             pred_class = ['cat', 'dog'][predicted]
@@ -731,7 +587,6 @@ def run_inference(image_path, model_file, image_size, device):
         print("Error: Unsupported model format")
         return None, None
 
-    # Print results
     print(
         f"\nInference Results:\nImage: {image_path}\nPrediction: {pred_class}\nConfidence: {conf_score:.2%}")
     return pred_class, conf_score
@@ -740,94 +595,65 @@ def run_inference(image_path, model_file, image_size, device):
 def main():
     """
     Main function to train the model or run inference.
-    
+
     This function:
     1. Parses command line arguments
     2. Sets up the device (CPU/GPU)
     3. Either runs inference on a single image or trains a new model
     4. Handles cleanup to prevent resource leaks
     """
-    # Track if we're using DataLoader with workers
     using_workers = False
     args = parse_args()
     device = setup_device()
 
-    # Check if we're in inference mode
     if args.inference:
         if not args.image_path:
             print("Error: --image_path is required for inference")
             exit(1)
 
-        # Find model file
         if args.model_file:
             model_file = args.model_file
-        elif os.path.exists(args.model_path):
+        elif Path(args.model_path).exists():
             model_file = args.model_path
             print(f"Using default PyTorch model: {model_file}")
-        elif os.path.exists(args.onnx_path):
+        elif Path(args.onnx_path).exists():
             model_file = args.onnx_path
             print(f"Using default ONNX model: {model_file}")
         else:
             print("Error: No trained model found")
             exit(1)
 
-        # Run inference
         run_inference(args.image_path, model_file, args.image_size, device)
         return
 
-    # Training mode
     print("Running in training mode...")
 
     try:
-        # Load data with or without augmentation
-        if args.augmentation:
-            print("Using data augmentation during training")
-            train_loader, val_loader = load_data(
-                args.data_dir, args.image_size, args.batch_size, args.val_split, device
-            )
-        else:
-            print("No data augmentation")
-            train_loader, val_loader = load_data_no_augmentation(
-                args.data_dir, args.image_size, args.batch_size, args.val_split, device
-            )
-
-        # We are using workers if num_workers > 0
+        train_loader, val_loader = load_data(
+            args.data_dir, args.image_size, args.batch_size, args.val_split, device, args.augmentation
+        )
         using_workers = True
 
-        # Initialize model
         model = CatDogCNN(args.image_size).to(device)
         print("\nModel Architecture:")
         print(model)
 
-        # Define loss function
-        # CrossEntropyLoss combines softmax and negative log likelihood loss
-        # It's commonly used for classification problems
         criterion = nn.CrossEntropyLoss()
-        
-        # Define optimizer
-        # SGD (Stochastic Gradient Descent) with momentum and weight decay
-        # - Momentum helps accelerate gradients in the right direction
-        # - Weight decay helps prevent overfitting
         optimizer = optim.SGD(
             model.parameters(), lr=args.learning_rate,
             momentum=args.momentum, weight_decay=args.weight_decay
         )
 
-        # Learning rate scheduler
-        # Reduces learning rate when validation loss plateaus
-        # This helps fine-tune the model as training progresses
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='min', factor=0.1, patience=args.patience
         )
 
-        # Train the model
         best_model_state, best_val_accuracy = train_model(
             model, train_loader, val_loader, criterion, optimizer, scheduler,
             device, args.num_epochs, args.early_stopping,
             args.early_stopping_patience, args.early_stopping_min_delta
         )
 
-        # Load best model and save
         if best_model_state is not None:
             model.load_state_dict(best_model_state)
             print("Loaded best model state")
@@ -837,53 +663,26 @@ def main():
         print("All operations completed successfully!")
 
     finally:
-        # Clean up resources to prevent hanging
         print("Cleaning up resources...")
-
-        # Move model to CPU before deleting
-        # This helps ensure GPU memory is properly freed
         if 'model' in locals():
             model.to('cpu')
             del model
-
-        # Release memory for specific device types
-        if device.type == 'cuda':
-            # CUDA-specific cleanup
-            torch.cuda.empty_cache()
-        elif device.type == 'mps':
-            # MPS-specific cleanup (Apple Silicon)
-            # No direct equivalent to cuda.empty_cache() for MPS yet
-            import gc
-            # Run garbage collection multiple times to ensure resources are freed
-            gc.collect()
-            gc.collect()
-
-        # Explicitly close DataLoaders if they were created
-        # This ensures background worker processes are terminated
+        
         if 'train_loader' in locals():
             del train_loader
         if 'val_loader' in locals():
             del val_loader
 
-        # Additional garbage collection for all devices
-        import gc
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+        elif device.type == 'mps':
+            gc.collect()
+            gc.collect()
+
         gc.collect()
 
-        print("Exiting program")
-
-        # If we used workers, we need to handle multiprocessing cleanup
-        if using_workers:
-            # Import multiprocessing to access cleanup methods
-            import multiprocessing
-
-            # Clean exit instead of forced exit when possible
-            if hasattr(multiprocessing, '_exit_function'):
-                # Call the multiprocessing cleanup function
-                multiprocessing._exit_function()
-
-            # For Apple Silicon, use a normal exit which should be sufficient
-            # after proper cleanup
-            import sys
+        if using_workers and hasattr(multiprocessing, '_exit_function'):
+            multiprocessing._exit_function()
             sys.exit(0)
 
 
