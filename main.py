@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Cat vs Dog Image Classifier using PyTorch
 
