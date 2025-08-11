@@ -6,7 +6,6 @@ Hyperparameters can be specified via command-line arguments.
 """
 
 import argparse
-import os
 import warnings
 import gc
 import sys
