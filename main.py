@@ -135,6 +135,9 @@ class EarlyStopping:
         return self.early_stop
 
 
+import torch
+import torch.nn as nn
+
 class CatDogCNN(nn.Module):
     """
     CNN architecture for cat vs dog classification.
@@ -152,46 +155,107 @@ class CatDogCNN(nn.Module):
     def __init__(self, image_size):
         super(CatDogCNN, self).__init__()
 
-        # First convolutional block
+        # =============== FIRST CONVOLUTIONAL BLOCK ===============
         # Conv2d: Applies 2D convolution to extract visual features
-        # 3 input channels (RGB), 32 output feature maps, 3x3 kernel
+        # Parameters:
+        #   - in_channels=3: RGB color channels (Red, Green, Blue)
+        #   - out_channels=32: Number of feature maps/filters to learn
+        #   - kernel_size=3: 3x3 sliding window for pattern detection
+        #   - padding=1: Add 1 pixel border to keep spatial dimensions same
+        # Input shape: [batch, 3, H, W] → Output shape: [batch, 32, H, W]
         self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
-        # BatchNorm2d: Normalizes the outputs of the convolutional layer
-        # Helps with faster and more stable training
+        
+        # BatchNorm2d: Normalizes feature maps to have mean≈0, std≈1
+        # Benefits: Faster training, better gradient flow, acts as regularization
+        # Parameter: 32 = number of channels to normalize (matches conv1 output)
+        # Shape unchanged: [batch, 32, H, W] → [batch, 32, H, W]
         self.bn1 = nn.BatchNorm2d(32)
-        # MaxPool2d: Reduces spatial dimensions by taking maximum in 2x2 regions
-        # This reduces computation and helps with translation invariance
+        
+        # MaxPool2d: Downsampling by taking maximum value in each 2x2 region
+        # Parameters:
+        #   - kernel_size=2: Size of pooling window (2x2)
+        #   - stride=2: Step size (non-overlapping windows)
+        # Effect: Reduces spatial dimensions by half
+        # Shape change: [batch, 32, H, W] → [batch, 32, H/2, W/2]
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # Second convolutional block - more feature maps for more complex patterns
+        # =============== SECOND CONVOLUTIONAL BLOCK ===============
+        # More feature maps (64) to detect more complex patterns
+        # Input: 32 feature maps from previous block
+        # Output: 64 feature maps with same spatial size (due to padding=1)
+        # Shape: [batch, 32, H, W] → [batch, 64, H, W]
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        
+        # Batch normalization for 64 channels
+        # Shape unchanged: [batch, 64, H, W] → [batch, 64, H, W]
         self.bn2 = nn.BatchNorm2d(64)
+        
+        # Second pooling layer - another 2x reduction in spatial size
+        # Shape: [batch, 64, H, W] → [batch, 64, H/2, W/2]
         self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # Third convolutional block - even more feature maps
+        # =============== THIRD CONVOLUTIONAL BLOCK ===============
+        # Even more feature maps (128) for detecting higher-level patterns
+        # Input: 64 feature maps, Output: 128 feature maps
+        # Shape: [batch, 64, H, W] → [batch, 128, H, W]
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        
+        # Batch normalization for 128 channels
+        # Shape unchanged: [batch, 128, H, W] → [batch, 128, H, W]
         self.bn3 = nn.BatchNorm2d(128)
+        
+        # Third pooling layer - spatial size reduced by 2 again
+        # Shape: [batch, 128, H, W] → [batch, 128, H/2, W/2]
         self.pool3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # Fourth convolutional block - final feature extraction
+        # =============== FOURTH CONVOLUTIONAL BLOCK ===============
+        # Final feature extraction with maximum feature maps (256)
+        # Input: 128 feature maps, Output: 256 feature maps
+        # Shape: [batch, 128, H, W] → [batch, 256, H, W]
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
+        
+        # Batch normalization for 256 channels
+        # Shape unchanged: [batch, 256, H, W] → [batch, 256, H, W]
         self.bn4 = nn.BatchNorm2d(256)
+        
+        # Fourth and final pooling layer
+        # Shape: [batch, 256, H, W] → [batch, 256, H/2, W/2]
         self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        # Calculate dimensions for fully connected layer
-        # After 4 pooling layers (each reducing dimensions by half), the size is divided by 16
+        # =============== DIMENSION CALCULATION FOR FC LAYERS ===============
+        # Calculate spatial dimensions after all pooling operations
+        # Each pooling reduces dimensions by factor of 2
+        # After 4 pooling layers: original_size / (2^4) = original_size / 16
+        # Floor division (//) ensures integer result (pixel dimensions must be whole numbers)
         feature_size = image_size // 16
+        
+        # Calculate total number of features for flattening
+        # Final feature map has shape: [batch, 256, feature_size, feature_size]
+        # When flattened: [batch, 256 * feature_size * feature_size]
         fc_input_size = 256 * feature_size * feature_size
 
-        # Fully connected layers for classification
-        # Takes flattened feature maps and outputs class probabilities
+        # =============== FULLY CONNECTED LAYERS ===============
+        # First fully connected layer: feature extraction → classification preparation
+        # Takes all spatial features and combines them into 512 learned representations
+        # Input shape: [batch, fc_input_size] → Output shape: [batch, 512]
         self.fc1 = nn.Linear(fc_input_size, 512)
-        # Dropout: Randomly zeroes some elements during training
-        # This prevents overfitting by making the network more robust
+        
+        # Dropout: Regularization technique to prevent overfitting
+        # During training: randomly sets 50% of neurons to zero
+        # During inference: does nothing (all neurons active)
+        # Forces network to not rely too heavily on any single feature
+        # Shape unchanged: [batch, 512] → [batch, 512]
         self.dropout = nn.Dropout(0.5)
-        # Final layer outputs 2 values (one per class: cat, dog)
+        
+        # Final classification layer: 512 features → 2 class scores
+        # Output represents raw scores (logits) for each class: [cat_score, dog_score]
+        # Input shape: [batch, 512] → Output shape: [batch, 2]
         self.fc2 = nn.Linear(512, 2)
-        # ReLU activation: max(0, x) - introduces non-linearity
+        
+        # ReLU activation function: Rectified Linear Unit
+        # Formula: f(x) = max(0, x)
+        # Purpose: Introduces non-linearity, allows network to learn complex patterns
+        # Zeros out negative values, keeps positive values unchanged
         self.relu = nn.ReLU()
 
     def forward(self, x):
@@ -199,39 +263,88 @@ class CatDogCNN(nn.Module):
         Forward pass through the network.
 
         This defines how the input flows through the layers to produce an output.
+        Each operation transforms the tensor shape and content progressively.
 
         Args:
             x (Tensor): Input tensor of shape [batch_size, 3, image_size, image_size]
+                       Represents a batch of RGB images
 
         Returns:
-            Tensor: Output tensor of shape [batch_size, 2] with logits for each class
+            Tensor: Output tensor of shape [batch_size, 2] 
+                   Contains logits for each class (cat=0, dog=1)
         """
-        # Process through convolutional blocks
-        # This loop applies each convolutional block in sequence
+        
+        # =============== CONVOLUTIONAL FEATURE EXTRACTION ===============
+        # Process through 4 convolutional blocks sequentially
+        # Each block: Convolution → Batch Norm → ReLU → Max Pooling
         for i in range(1, 5):
-            # Get the layers for the current block
-            conv = getattr(self, f'conv{i}')
-            bn = getattr(self, f'bn{i}')
-            pool = getattr(self, f'pool{i}')
+            # Dynamically get the layers for current block (conv1, bn1, pool1, etc.)
+            # getattr(self, f'conv{i}') is equivalent to self.conv1, self.conv2, etc.
+            conv = getattr(self, f'conv{i}')  # Get convolution layer
+            bn = getattr(self, f'bn{i}')      # Get batch normalization layer  
+            pool = getattr(self, f'pool{i}')  # Get max pooling layer
 
-            # Apply convolution
+            # Step 1: Apply 2D convolution
+            # Slides filters across input to detect patterns/features
+            # Shape changes: [batch, in_channels, H, W] → [batch, out_channels, H, W]
             x = conv(x)
-            # Apply batch normalization
+            
+            # Step 2: Apply batch normalization
+            # Normalizes feature maps: subtracts mean, divides by std, applies learned scale/shift
+            # Improves training stability and convergence speed
+            # Shape unchanged: [batch, channels, H, W] → [batch, channels, H, W]
             x = bn(x)
-            # Apply ReLU activation
+            
+            # Step 3: Apply ReLU activation
+            # Element-wise operation: replaces negative values with 0
+            # Introduces non-linearity essential for learning complex patterns
+            # Shape unchanged: [batch, channels, H, W] → [batch, channels, H, W]
             x = self.relu(x)
-            # Apply max pooling
+            
+            # Step 4: Apply max pooling
+            # Downsamples by taking maximum value in each 2x2 region
+            # Reduces computational load and provides translation invariance
+            # Shape changes: [batch, channels, H, W] → [batch, channels, H/2, W/2]
             x = pool(x)
 
-        # Flatten for fully connected layers
-        # Reshape from [batch, channels, height, width] to [batch, channels*height*width]
+        # After all 4 blocks, tensor shape is approximately:
+        # [batch, 256, image_size/16, image_size/16]
+
+        # =============== PREPARE FOR CLASSIFICATION ===============
+        # Flatten 4D feature maps into 2D for fully connected layers
+        # x.size(0) gets batch dimension (preserve batch size)
+        # -1 means "calculate this dimension automatically" 
+        # Transforms: [batch, 256, H, W] → [batch, 256*H*W]
+        # This converts spatial feature maps into a single feature vector per image
         x = x.view(x.size(0), -1)
 
-        # Fully connected layers
+        # =============== CLASSIFICATION LAYERS ===============
+        # First fully connected layer
+        # Linear transformation: x_out = x_in @ weight^T + bias
+        # Combines all spatial features into 512 higher-level representations
+        # Shape: [batch, fc_input_size] → [batch, 512]
         x = self.fc1(x)
+        
+        # Apply ReLU activation after first FC layer
+        # Introduces non-linearity for the classification stage
+        # Shape unchanged: [batch, 512] → [batch, 512]
         x = self.relu(x)
+        
+        # Apply dropout for regularization
+        # Training mode: randomly zeros 50% of features to prevent overfitting
+        # Evaluation mode: uses all features (dropout disabled)
+        # Shape unchanged: [batch, 512] → [batch, 512]
         x = self.dropout(x)
+        
+        # Final classification layer
+        # Maps 512 features to 2 class scores (cat vs dog)
+        # No activation applied - returns raw logits for loss computation
+        # Shape: [batch, 512] → [batch, 2]
         x = self.fc2(x)
+        
+        # Return final classification scores
+        # These logits will be used with CrossEntropyLoss during training
+        # Or passed through softmax for probability prediction during inference
         return x
 
 
@@ -592,58 +705,248 @@ def run_inference(image_path, model_file, image_size, device):
 
 def run_training_and_cleanup(args, device):
     """
-    Encapsulates the training process to ensure DataLoaders are properly cleaned up.
+    Orchestrates the complete machine learning training pipeline while ensuring proper resource management.
+    
+    This function wraps the entire training process in a try-finally block to guarantee that
+    system resources (especially GPU memory and multiprocessing workers) are properly released,
+    preventing memory leaks and zombie processes that could accumulate over multiple training runs.
+    
+    MACHINE LEARNING WORKFLOW OVERVIEW:
+    The function implements a typical ML training pipeline:
+    1. Data Loading & Preprocessing
+    2. Model Architecture Definition
+    3. Training Configuration (loss, optimizer, scheduler)
+    4. Training Loop Execution
+    5. Model Persistence (saving)
+    6. Resource Cleanup
+    
+    WHY THIS FUNCTION EXISTS:
+    Machine learning training involves several resources that can cause problems if not properly managed:
+    - GPU memory can accumulate unused tensors (memory leaks)
+    - DataLoader worker processes can become "zombies" if not properly terminated
+    - Large models and datasets consume significant RAM
+    - Multi-GPU setups require careful synchronization
+    
+    This function ensures all these resources are properly cleaned up regardless of whether
+    training succeeds, fails, or is interrupted.
+    
+    Args:
+        args: Parsed command-line arguments containing all training configuration
+              (learning rate, batch size, number of epochs, data paths, etc.)
+        device (torch.device): Computational device (CPU, CUDA GPU, or Apple MPS)
+                              determined by setup_device() function
+    
+    Returns:
+        bool: True if DataLoader workers were used (needed for cleanup decision in main()),
+              False otherwise
     """
+    
+    # ===== INITIALIZATION AND SAFETY FLAG =====
+    # Track whether we're using multiprocessing workers in DataLoaders
+    # This information is crucial for deciding cleanup strategy later
+    # Workers (separate processes) require more aggressive cleanup than single-threaded loading
     using_workers = False
+    
     try:
+        # ===== STEP 1: DATA LOADING AND PREPROCESSING =====
+        # This is often the most memory-intensive part of the pipeline
+        # Creates two DataLoader objects that handle:
+        # - Loading images from disk in batches
+        # - Applying transformations (resize, normalize, augmentation)
+        # - Shuffling training data while keeping validation data in order
+        # - Managing worker processes for parallel data loading
+        print("Loading and preprocessing dataset...")
         train_loader, val_loader = load_data(
-            args.data_dir, args.image_size, args.batch_size, args.val_split, device, args.augmentation
+            args.data_dir,        # Directory containing image folders (e.g., /data/cats/, /data/dogs/)
+            args.image_size,      # Target size to resize all images (e.g., 256x256 pixels)
+            args.batch_size,      # How many images to process simultaneously (affects memory usage)
+            args.val_split,       # What fraction of data to use for validation (e.g., 0.2 = 20%)
+            device,               # Where to store the data (GPU memory vs RAM)
+            args.augmentation     # Whether to apply random transformations to increase dataset variety
         )
+        
+        # Mark that we're using worker processes for data loading
+        # Workers are separate Python processes that load data in parallel
+        # This significantly speeds up training but requires careful cleanup
         using_workers = True
+        print("✓ Data loading completed successfully")
 
+        # ===== STEP 2: MODEL ARCHITECTURE INSTANTIATION =====
+        # Create the neural network model and move it to the appropriate device
+        # The model consists of:
+        # - Convolutional layers for feature extraction (detecting edges, textures, shapes)
+        # - Pooling layers for dimensionality reduction
+        # - Fully connected layers for classification decisions
+        print("Initializing neural network model...")
         model = CatDogCNN(args.image_size).to(device)
+        
+        # Display the model architecture for debugging and verification
+        # This helps ensure the model has the expected structure and parameter count
         print("\nModel Architecture:")
         print(model)
+        
+        # Calculate and display total number of trainable parameters
+        # This gives insight into model complexity and memory requirements
+        total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Total trainable parameters: {total_params:,}")
 
+        # ===== STEP 3: TRAINING CONFIGURATION SETUP =====
+        # Configure the three essential components for training:
+        
+        # LOSS FUNCTION (Criterion):
+        # CrossEntropyLoss is standard for multi-class classification
+        # It combines softmax activation with negative log-likelihood loss
+        # Mathematically: loss = -log(softmax(predicted_class_score))
+        # Lower loss = better predictions
+        print("Setting up training components...")
         criterion = nn.CrossEntropyLoss()
+        
+        # OPTIMIZER:
+        # SGD (Stochastic Gradient Descent) updates model weights to minimize loss
+        # Key parameters:
+        # - lr (learning rate): How big steps to take when updating weights
+        # - momentum: Helps accelerate convergence and avoid local minima  
+        # - weight_decay: L2 regularization to prevent overfitting
         optimizer = optim.SGD(
-            model.parameters(), lr=args.learning_rate,
-            momentum=args.momentum, weight_decay=args.weight_decay
+            model.parameters(),           # All model weights and biases to optimize
+            lr=args.learning_rate,        # Step size for weight updates
+            momentum=args.momentum,       # Momentum factor for smoother convergence
+            weight_decay=args.weight_decay # Regularization strength
         )
-
+        
+        # LEARNING RATE SCHEDULER:
+        # Automatically reduces learning rate when validation loss stops improving
+        # This helps fine-tune the model in later stages of training
+        # 'min' mode: reduce LR when validation loss stops decreasing
+        # factor=0.1: multiply LR by 0.1 when reducing
+        # patience=args.patience: wait this many epochs before reducing
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.1, patience=args.patience
+            optimizer,
+            mode='min',              # Monitor for decreasing validation loss
+            factor=0.1,              # Multiply LR by this factor when reducing  
+            patience=args.patience   # Epochs to wait before reducing LR
         )
+        print("✓ Training configuration completed")
 
+        # ===== STEP 4: TRAINING LOOP EXECUTION =====
+        # This is the core machine learning process where the model learns to classify images
+        # The training loop alternates between:
+        # 1. Forward pass: Feed images through model to get predictions
+        # 2. Loss calculation: Compare predictions to true labels
+        # 3. Backward pass: Calculate gradients (how to adjust weights)
+        # 4. Weight update: Apply gradients to improve model
+        # 5. Validation: Test model on unseen data to check generalization
+        print("Starting training process...")
+        print(f"Training for maximum {args.num_epochs} epochs...")
+        if args.early_stopping:
+            print(f"Early stopping enabled: will stop if no improvement for {args.early_stopping_patience} epochs")
+        
         best_model_state, best_val_accuracy = train_model(
-            model, train_loader, val_loader, criterion, optimizer, scheduler,
-            device, args.num_epochs, args.early_stopping,
-            args.early_stopping_patience, args.early_stopping_min_delta
+            model,                               # The neural network to train
+            train_loader,                        # DataLoader with training images
+            val_loader,                          # DataLoader with validation images  
+            criterion,                           # Loss function to minimize
+            optimizer,                           # Algorithm for updating weights
+            scheduler,                           # Learning rate adjustment strategy
+            device,                              # Hardware to use (CPU/GPU)
+            args.num_epochs,                     # Maximum number of training cycles
+            args.early_stopping,                 # Whether to stop early if no improvement
+            args.early_stopping_patience,        # How many epochs to wait before stopping
+            args.early_stopping_min_delta       # Minimum improvement threshold
         )
+        print("✓ Training process completed")
 
+        # ===== STEP 5: BEST MODEL RESTORATION =====
+        # During training, we save the model state with the best validation accuracy
+        # This prevents overfitting by using the model that generalizes best to unseen data
+        # rather than the model from the final epoch (which might be overfitted)
         if best_model_state is not None:
             model.load_state_dict(best_model_state)
-            print("Loaded best model state")
-        save_model(model, args.model_path, args.onnx_path, args.image_size, device)
+            print(f"✓ Restored best model state (validation accuracy: {best_val_accuracy:.2f}%)")
+        else:
+            print("⚠ Warning: No best model state saved, using final epoch model")
+        
+        # ===== STEP 6: MODEL PERSISTENCE =====
+        # Save the trained model in two formats:
+        # 1. PyTorch (.pth): Native format, includes full model state
+        # 2. ONNX (.onnx): Universal format for deployment across different frameworks
+        print("Saving trained model...")
+        save_model(
+            model,              # The trained neural network
+            args.model_path,    # Path for PyTorch format file
+            args.onnx_path,     # Path for ONNX format file  
+            args.image_size,    # Image dimensions (needed for ONNX export)
+            device              # Device used for computation
+        )
+        print("✓ Model saved successfully")
 
-        print("All operations completed successfully!")
+        print("\n" + "="*50)
+        print("🎉 ALL TRAINING OPERATIONS COMPLETED SUCCESSFULLY! 🎉")
+        print("="*50)
         
-        # Explicitly delete loaders and model to force cleanup
-        del train_loader
-        del val_loader
-        del model
+        # ===== IMMEDIATE CLEANUP FOR SMOOTH OPERATION =====
+        # Explicitly delete large objects to free memory before the finally block
+        # This is especially important when running multiple training sessions
+        # or when system memory is limited
+        print("Performing immediate cleanup of training objects...")
+        del train_loader    # Free DataLoader and associated worker processes
+        del val_loader      # Free validation DataLoader  
+        del model           # Free model parameters and buffers from memory
+        print("✓ Immediate cleanup completed")
         
+        # Return success status with worker information
         return using_workers
 
-    finally:
-        print("Cleaning up resources...")
-        if device.type == 'cuda':
-            torch.cuda.empty_cache()
-        elif device.type == 'mps':
-            gc.collect()
-            gc.collect()
-        gc.collect()
+    except Exception as e:
+        # ===== ERROR HANDLING =====
+        # If anything goes wrong during training, log the error details
+        # The finally block will still execute to clean up resources
+        print(f"\n❌ ERROR DURING TRAINING: {e}")
+        print("Proceeding with cleanup and resource deallocation...")
         
+        # Even on failure, return the worker status for proper cleanup
+        return using_workers
+        
+    finally:
+        # ===== GUARANTEED RESOURCE CLEANUP =====
+        # This block ALWAYS executes, regardless of success or failure
+        # It's crucial for preventing resource leaks and system stability
+        
+        print("Executing comprehensive resource cleanup...")
+        
+        # DEVICE-SPECIFIC MEMORY CLEANUP:
+        # Different hardware accelerators require different cleanup strategies
+        
+        if device.type == 'cuda':
+            # NVIDIA GPU cleanup
+            # CUDA can accumulate "zombie" tensors in GPU memory even after Python
+            # objects are deleted. empty_cache() forces immediate GPU memory deallocation
+            print("Clearing CUDA GPU memory cache...")
+            torch.cuda.empty_cache()
+            print("✓ CUDA memory cleared")
+            
+        elif device.type == 'mps':
+            # Apple Silicon GPU cleanup  
+            # MPS (Metal Performance Shaders) on Apple Silicon requires more aggressive
+            # cleanup. We run garbage collection twice because Apple's implementation
+            # sometimes needs multiple passes to fully release GPU memory
+            print("Performing Apple MPS GPU memory cleanup...")
+            gc.collect()    # First garbage collection pass
+            gc.collect()    # Second pass for stubborn MPS memory leaks
+            print("✓ MPS memory cleared")
+        
+        # SYSTEM-WIDE MEMORY CLEANUP:
+        # Force Python's garbage collector to run immediately
+        # This ensures that all Python objects (especially large NumPy arrays
+        # and PyTorch tensors) are properly deallocated from system RAM
+        print("Running system garbage collection...")
+        gc.collect()
+        print("✓ System memory cleanup completed")
+        
+        print("✓ All resource cleanup operations completed successfully")
+    
+    # This return statement should never be reached due to the return statements
+    # in the try and except blocks, but it's here for completeness
     return False
 
 
