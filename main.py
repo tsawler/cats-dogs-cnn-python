@@ -6,19 +6,15 @@ Hyperparameters can be specified via command-line arguments.
 """
 
 import argparse
-import warnings
 import gc
 import os
+import warnings
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import (
-    DataLoader,
-    random_split,
-    Subset
-)
+from torch.utils.data import DataLoader, Subset, random_split
 from torchvision import datasets, transforms
 from tqdm import tqdm
 
@@ -135,8 +131,7 @@ class EarlyStopping:
         return self.early_stop
 
 
-import torch
-import torch.nn as nn
+
 
 class CatDogCNN(nn.Module):
     """
